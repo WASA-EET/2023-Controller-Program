@@ -7,6 +7,8 @@
 #include <Adafruit_DPS310.h>
 #include <Adafruit_BNO055.h>
 
+#define ENABLE_ALERT
+
 //#define PRINT_DEBUG_DPS
 //#define PRINT_DEBUG_BNO
 //#define PRINT_DEBUG_GPS
@@ -92,9 +94,17 @@ void GetDPS() {
 
 #pragma region BNO055
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
-float roll, pitch, yaw;
+float roll = 0, pitch = 0, yaw = 0;
 float standard_yaw = 0;
-
+void BuzzerTask(void *pvParameters) {
+  int alert = 0;
+  while (true) {
+    if (abs(roll) > 5.0 || abs(pitch) > 5.0) alert++;
+    else alert = 0;
+    dacWrite(BUZZER_PIN, alert >= 3 ? analogRead(SLIDE_VL_PIN) / 16 : 0);
+    delay(1000);
+  }
+}
 void InitBNO() {
   if (!bno.begin()) {
     Serial.println("Failed to find BNO");
@@ -112,7 +122,7 @@ void GetBNO() {
   pitch = euler.y();
   roll = euler.z();
 #ifdef PRINT_DEBUG_BNO
-  Serial.print(" 　DIR_xyz:");
+  Serial.print("DIR_xyz:");
   Serial.print(yaw - standard_yaw);
   Serial.print(", ");
   Serial.print(pitch);
@@ -315,76 +325,76 @@ uint32_t log_start_time;
 static unsigned char lastBtnSt = 0;   // 前回ボタン状態
 static unsigned char fixedBtnSt = 0;  // 確定ボタン状態
 static unsigned long smpltmr = 0;     // サンプル時間
-File file;
-#define PRINT_COMMA file.print(", ")
+File fp;
+#define PRINT_COMMA fp.print(", ")
 
 void SDWriteTask(void *pvParameters) {
-  while (file && log_state) {
-    file.print(millis() - log_start_time);
+  while (fp && log_state) {
+    fp.print(millis() - log_start_time);
     PRINT_COMMA;
-    file.print(gps_year);
+    fp.print(gps_year);
     PRINT_COMMA;
-    file.print(gps_month);
+    fp.print(gps_month);
     PRINT_COMMA;
-    file.print(gps_day);
+    fp.print(gps_day);
     PRINT_COMMA;
-    file.print(gps_hour);
+    fp.print(gps_hour);
     PRINT_COMMA;
-    file.print(gps_minute);
+    fp.print(gps_minute);
     PRINT_COMMA;
-    file.print(gps_second);
+    fp.print(gps_second);
     PRINT_COMMA;
-    file.print(gps_latitude);
+    fp.print(gps_latitude);
     PRINT_COMMA;
-    file.print(gps_longitude);
+    fp.print(gps_longitude);
     PRINT_COMMA;
-    file.print(gps_altitude);
+    fp.print(gps_altitude);
     PRINT_COMMA;
-    file.print(gps_speed);
+    fp.print(gps_speed);
     PRINT_COMMA;
-    file.print(gps_speed);
+    fp.print(gps_speed);
     PRINT_COMMA;
-    file.print(roll);
+    fp.print(roll);
     PRINT_COMMA;
-    file.print(pitch);
+    fp.print(pitch);
     PRINT_COMMA;
-    file.print(yaw - standard_yaw);
+    fp.print(yaw - standard_yaw);
     PRINT_COMMA;
-    file.print(temperature);
+    fp.print(temperature);
     PRINT_COMMA;
-    file.print(pressure);
+    fp.print(pressure);
     PRINT_COMMA;
-    file.print(ground_pressure);
+    fp.print(ground_pressure);
     PRINT_COMMA;
-    file.print(dps_altitude);
+    fp.print(dps_altitude);
     PRINT_COMMA;
-    file.print(altitude);
+    fp.print(altitude);
     PRINT_COMMA;
-    file.print(air_speed);
+    fp.print(air_speed);
     PRINT_COMMA;
-    file.print(propeller_rotation);
+    fp.print(propeller_rotation);
     PRINT_COMMA;
-    file.print(ladder_rotation);
+    fp.print(ladder_rotation);
     PRINT_COMMA;
-    file.print(elevator_rotation);
+    fp.print(elevator_rotation);
     PRINT_COMMA;
-    file.println();
+    fp.println();
     delay(50);
   }
-  file.close();
+  fp.close();
   Serial.println("File closed");
   vTaskDelete(NULL);
 }
 void StartSDWrite() {
-  if (file || log_state) return;
+  if (log_state) return;
   String path;
   int count = 0;
   do {
-    path = String(count) + String(".csv");
+    path = String("/") + String(count) + String(".csv");
     count++;
   } while (SD.exists(path));
-  file = SD.open(path, FILE_WRITE);
-  if (file) {
+  fp = SD.open(path, FILE_WRITE);
+  if (fp) {
     Serial.println(path + " Opened");
     log_state = true;
   } else {
@@ -392,7 +402,7 @@ void StartSDWrite() {
     log_state = false;
   }
   log_start_time = millis();
-  file.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Ladder, Elevator");
+  fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Ladder, Elevator");
   
   xTaskCreatePinnedToCore(SDWriteTask, "SDWriteTask", 4096, NULL, 1, NULL, 0);
 }
@@ -404,14 +414,13 @@ void UpdateLogState() {
   smpltmr = millis();
 
   int btnSt = digitalRead(LOG_SW_PIN);
-  int cmp = (btnSt == lastBtnSt);
+  bool cmp = (btnSt == lastBtnSt);
   lastBtnSt = btnSt;
 
   if (!cmp) return;
 
   if (!btnSt && (btnSt != fixedBtnSt)) {
     fixedBtnSt = btnSt;
-
     if (!log_state) StartSDWrite();
     else StopSDWrite();
   }
@@ -429,6 +438,14 @@ void InitSD() {
     return;
   }
   Serial.println("SD OK!");
+}
+#pragma endregion
+
+#pragma region POWER
+void PowerTask(void *pvParameters) {
+  while (true) {
+    delay(1000);
+  }
 }
 #pragma endregion
 
@@ -517,6 +534,8 @@ void InitServer() {
 
 void setup() {
   Serial.begin(115200);
+  Serial1.begin(115200, SERIAL_8N1, 0, 2); // RX = GPIO0, TX = GPIO2
+
   pinMode(RPM_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(SDA_PIN, INPUT_PULLUP);
@@ -543,6 +562,12 @@ void setup() {
   InitSD();
   delay(100);
   InitServer();
+  delay(100);
+#ifdef ENABLE_ALERT
+  xTaskCreatePinnedToCore(BuzzerTask, "BuzzerTask", 4096, NULL, 1, NULL, 0);
+  delay(100);
+#endif
+  xTaskCreatePinnedToCore(PowerTask, "PowerTask", 4096, NULL, 1, NULL, 0);
   delay(100);
 }
 

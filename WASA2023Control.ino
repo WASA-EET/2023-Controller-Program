@@ -59,7 +59,7 @@ const int SERVO_FREQUENCY = 100;
 static int ladder_rotation = 0;
 static int elevator_rotation = 0;
 static int trim = 0;
-static int step = 4;
+static int step = 1;
 
 WebServer server(80);
 static int wifi_status;
@@ -388,7 +388,7 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 #pragma endregion
 
 int ToRotation(int v) {
-  return (int)(sinh((v / 4095.0) * 2.17732) / 2 / 2.17732 * 500 - 250);
+  return (int)((sinh(((v - 2048.0) / 2048.0) * 2.17732) / 2 / 2.17732) * 500);
 }
 
 void ServoTask(void *pvParameters) {
@@ -406,9 +406,9 @@ void ServoTask(void *pvParameters) {
     elevator_rotation = ToRotation(elevator_rotation) + GetDefaultAngle(SERVO_ID_ELEVATOR) + trim * step + btnPushCnt[BTN_DEF_UP] - btnPushCnt[BTN_DEF_DOWN];
     LobotSerialServoMove(Serial2, SERVO_ID_LADDER, ladder_rotation, t);
     LobotSerialServoMove(Serial2, SERVO_ID_ELEVATOR, elevator_rotation, t);
-    Serial.println(ladder_rotation);
-    Serial.println(elevator_rotation);
-    Serial.println();
+    // Serial.println(ladder_rotation);
+    // Serial.println(elevator_rotation);
+    // Serial.println();
     delay(t);
   }
 }
@@ -528,18 +528,13 @@ void btnEvent(int k) {
 
 void DisplayValue(int v) {
   digitalWrite(LATCH_PIN, LOW);
-  if (v > 0) {
+  if (v < 0) {
     v *= -1;
-    SPI.transfer((byte)0b10000000);
-  } else if (v < 0) {
-    SPI.transfer((byte)0b00000000);
+    SPI.transfer((byte)0b00000010); // マイナスを表示
   } else {
     SPI.transfer((byte)0000000000);
   }
-  if (v >= 100) v = 99;
-  int a = v / 10, b = v % 10;
-  SPI.transfer(DIGITS[a]);  // 10の桁 +1でドット表示
-  SPI.transfer(DIGITS[b]);  // 1の桁
+  SPI.transfer(DIGITS[v % 10]);  // 1の桁
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -574,10 +569,12 @@ void setup() {
   SPI.setDataMode(0);
   delay(100);
 
+  SetDefaultAngle(2, 500);
+  SetDefaultAngle(3, 500);
   // LobotSerialServoLoad(Serial2, 2);
   // LobotSerialServoLoad(Serial2, 3);
 
-  if (digitalRead(WIFI_STATUS_SW_PIN) == LOW) {
+  if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("WASA2023Control", "wasa2023");
     server.on("/", handleRoot);
