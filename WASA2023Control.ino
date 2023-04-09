@@ -7,13 +7,15 @@
 #include <SPI.h>
 #include <EEPROM.h>
 
+const int BOOT_PIN = 0;
+
 const int WIFI_STATUS_SW_PIN = 19;
 const int WIFI_STATUS_LED_PIN = 4;
 
-const int LADDER_STICK_PIN = 32; // 32 or 33
+const int LADDER_STICK_PIN = 33;  // 32 or 33
 const int LADDER_CHECK_PIN = 13;
 const int LADDER_MINI_STICK_PIN = 39;
-const int ELEVATOR_STICK_PIN = 34; // 34 or 35
+const int ELEVATOR_STICK_PIN = 34;  // 34 or 35
 const int ELEVATOR_CHECK_PIN = 12;
 const int ELEVATOR_MINI_STICK_PIN = 36;
 
@@ -38,12 +40,20 @@ const int BTN_PIN[BTN_SIZE] = { 25, 26, 27, 14, 15, 21, 22 };  // ボタン入�
 enum {
   BTN_TRIM_UP = 0,
   BTN_TRIM_DOWN = 1,
-  BTN_TRIM_RESET = 2,
+  BTN_ROT_MODE = 2,
   BTN_DEF_LEFT = 3,
   BTN_DEF_RIGHT = 4,
   BTN_DEF_UP = 5,
   BTN_DEF_DOWN = 6
 };
+enum {
+  ROT_MODE_LINEAR = 0,
+  ROT_MODE_SINH1 = 1,
+  ROT_MODE_SINH2 = 2,
+  ROT_MODE_SINH3 = 3,
+  ROT_MODE_MAX = 4
+};
+static int ROTATION_MODE = 0;
 static unsigned char lastBtnSt[BTN_SIZE] = { 0 };   // 前回ボタン状態
 static unsigned char fixedBtnSt[BTN_SIZE] = { 0 };  // 確定ボタン状態
 static int btnPushCnt[BTN_SIZE] = { 0 };            // カウント数
@@ -59,12 +69,12 @@ const int SERVO_FREQUENCY = 100;
 static int ladder_rotation = 0;
 static int elevator_rotation = 0;
 static int trim = 0;
-static int step = 1;
+static int step = 4;
 
 WebServer server(80);
 static int wifi_status;
-const char* const STA_SSID = "WASA2023Measurement";
-const char* const STA_PASS = "wasa2023";
+const char *const STA_SSID = "WASA2023Measurement";
+const char *const STA_PASS = "wasa2023";
 
 #pragma region SERVO_LIBRARY
 #define GET_LOW_BYTE(A) (uint8_t)((A))
@@ -298,6 +308,7 @@ int LobotSerialServoReceiveHandle(HardwareSerial &SerialX, byte *ret) {
       }
     }
   }
+  return -1;
 }
 
 
@@ -387,13 +398,26 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 }
 #pragma endregion
 
-int ToRotation(int v) {
-  return (int)((sinh(((v - 2048.0) / 2048.0) * 2.17732) / 2 / 2.17732) * 500);
+double curvature = 0;
+int ToRotation(int x) {
+  if (ROTATION_MODE == ROT_MODE_LINEAR) {
+    return (int)((x - 2048.0) / 2048.0 * 250 + 500);
+  } else {
+    return (int)(sinh((x - 2048.0) / (2048.0 / curvature)) / sinh(curvature) * 250 + 500);
+  }
 }
 
 void ServoTask(void *pvParameters) {
   while (true) {
     trim = (btnPushCnt[BTN_TRIM_UP] - btnPushCnt[BTN_TRIM_DOWN]);
+    if (trim > 9) {
+      btnPushCnt[BTN_TRIM_UP] = 9 + btnPushCnt[BTN_TRIM_DOWN];
+      trim = 9;
+    }
+    if (trim < 0) {
+      btnPushCnt[BTN_TRIM_DOWN] = btnPushCnt[BTN_TRIM_UP];
+      trim = 0;
+    }
     int t = 1000 / SERVO_FREQUENCY;
 #ifdef MINI_STICK
     ladder_rotation = analogRead(LADDER_MINI_STICK_PIN);
@@ -427,7 +451,7 @@ void SaveTask(void *pvParameters) {
 
 void SetDefaultAngle(unsigned char ID, int DefaultAngle) {
   if (ID == SERVO_BROADCAST) return;
-  if (DefaultAngle > 750 || DefaultAngle < 250) return;
+  if (DefaultAngle > 700 || DefaultAngle < 300) return;
   // IDに応じて保存場所を変更
   EEPROM.put<int>(ID * sizeof(int), DefaultAngle);
   EEPROM.commit();
@@ -526,15 +550,10 @@ void btnEvent(int k) {
   }
 }
 
-void DisplayValue(int v) {
+void DisplayCurrent() {
   digitalWrite(LATCH_PIN, LOW);
-  if (v < 0) {
-    v *= -1;
-    SPI.transfer((byte)0b00000010); // マイナスを表示
-  } else {
-    SPI.transfer((byte)0000000000);
-  }
-  SPI.transfer(DIGITS[v % 10]);  // 1の桁
+  SPI.transfer(DIGITS[ROTATION_MODE]); // 回転モード（線形・非線形）の表示
+  SPI.transfer(DIGITS[trim]);  // トリム値
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -544,9 +563,10 @@ void setup() {
   Serial2.begin(115200);
   EEPROM.begin(1024);
 
+  pinMode(BOOT_PIN, INPUT_PULLUP);
   pinMode(BTN_PIN[BTN_TRIM_UP], INPUT_PULLUP);
   pinMode(BTN_PIN[BTN_TRIM_DOWN], INPUT_PULLUP);
-  pinMode(BTN_PIN[BTN_TRIM_RESET], INPUT_PULLUP);
+  pinMode(BTN_PIN[BTN_ROT_MODE], INPUT_PULLUP);
   pinMode(BTN_PIN[BTN_DEF_LEFT], INPUT_PULLUP);
   pinMode(BTN_PIN[BTN_DEF_RIGHT], INPUT_PULLUP);
   pinMode(BTN_PIN[BTN_DEF_UP], INPUT_PULLUP);
@@ -571,8 +591,6 @@ void setup() {
 
   SetDefaultAngle(2, 500);
   SetDefaultAngle(3, 500);
-  // LobotSerialServoLoad(Serial2, 2);
-  // LobotSerialServoLoad(Serial2, 3);
 
   if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
     WiFi.mode(WIFI_AP_STA);
@@ -612,9 +630,17 @@ void loop() {
   for (int i = 0; i < BTN_SIZE; i++)
     btnEvent(i);
 
-  if (btnPushCnt[BTN_TRIM_RESET] != 0) {
-    btnPushCnt[BTN_TRIM_UP] = btnPushCnt[BTN_TRIM_DOWN] = btnPushCnt[BTN_TRIM_RESET] = 0;
-  }
+  ROTATION_MODE = btnPushCnt[BTN_ROT_MODE] % ROT_MODE_MAX;
 
-  DisplayValue(trim);
+  DisplayCurrent();
+
+  if (digitalRead(BOOT_PIN) == LOW) {
+    if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
+      LobotSerialServoUnload(Serial2, SERVO_ID_LADDER);
+      LobotSerialServoUnload(Serial2, SERVO_ID_ELEVATOR);
+    } else {
+      LobotSerialServoLoad(Serial2, SERVO_ID_LADDER);
+      LobotSerialServoLoad(Serial2, SERVO_ID_ELEVATOR);
+    }
+  }
 }

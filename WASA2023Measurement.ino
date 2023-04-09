@@ -7,6 +7,8 @@
 #include <Adafruit_DPS310.h>
 #include <Adafruit_BNO055.h>
 
+int cadence = 0; // TODO: ケイデンス後日実装
+
 #define ENABLE_ALERT
 
 //#define PRINT_DEBUG_DPS
@@ -119,7 +121,7 @@ void GetBNO() {
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
   yaw = euler.x();
-  pitch = euler.y();
+  pitch = euler.y() * -1;
   roll = euler.z();
 #ifdef PRINT_DEBUG_BNO
   Serial.print("DIR_xyz:");
@@ -136,17 +138,17 @@ void GetBNO() {
 #pragma region GPS
 #define GPSSerial Serial2
 TinyGPSPlus gps;
-uint32_t gps_latitude = 0;     // 緯度 10000000倍 359752780
-uint32_t gps_longitude = 0;    // 経度 10000000倍 1395238890
-uint16_t gps_year = 0;     // 西暦
-uint8_t gps_month = 0;     // 月
-uint8_t gps_day = 0;       // 日
-uint16_t gps_hour = 0;     // 時
-uint16_t gps_minute = 0;   // 分
-uint16_t gps_second = 0;   // 秒
-uint32_t gps_altitude = 0;  // 高度 センチ単位
-uint16_t gps_course = 0;    // 進行方向(deg) 100倍
-uint16_t gps_speed = 0;  // 対地速度(m/s) 1000倍 精度は高くないので参考程度に
+uint32_t gps_latitude = 0;   // 緯度 10000000倍 359752780
+uint32_t gps_longitude = 0;  // 経度 10000000倍 1395238890
+uint16_t gps_year = 0;       // 西暦
+uint8_t gps_month = 0;       // 月
+uint8_t gps_day = 0;         // 日
+uint16_t gps_hour = 0;       // 時
+uint16_t gps_minute = 0;     // 分
+uint16_t gps_second = 0;     // 秒
+uint32_t gps_altitude = 0;   // 高度 センチ単位
+uint16_t gps_course = 0;     // 進行方向(deg) 100倍
+uint16_t gps_speed = 0;      // 対地速度(m/s) 1000倍 精度は高くないので参考程度に
 
 void InitGPS() {
   GPSSerial.begin(9600);
@@ -155,16 +157,16 @@ void GetGPS() {
   while (GPSSerial.available() > 0) {
     gps.encode(GPSSerial.read());
     if (gps.location.isUpdated()) {
-      gps_latitude = (uint32_t)(gps.location.lat() * 10000000); // 10000000倍
-      gps_longitude = (uint32_t)(gps.location.lng() * 10000000); // 10000000倍
+      gps_latitude = (uint32_t)(gps.location.lat() * 10000000);   // 10000000倍
+      gps_longitude = (uint32_t)(gps.location.lng() * 10000000);  // 10000000倍
       gps_year = (uint16_t)gps.date.year();
       gps_month = (uint8_t)gps.date.month();
       gps_day = (uint8_t)gps.date.day();
       gps_hour = gps.time.hour() + 9;  // 時差を考慮すること
       gps_minute = gps.time.minute();
       gps_second = gps.time.second();
-      gps_altitude = (uint32_t)gps.altitude.value(); // 高度 センチ単位
-      gps_course = (uint16_t)gps.course.value(); // 進行方向(deg) 100倍
+      gps_altitude = (uint32_t)gps.altitude.value();  // 高度 センチ単位
+      gps_course = (uint16_t)gps.course.value();      // 進行方向(deg) 100倍
       gps_speed = (uint16_t)(gps.speed.mps() * 1000);
 #ifdef PRINT_DEBUG_GPS
       Serial.print("Latitude:  ");
@@ -207,7 +209,7 @@ double snapCurve(uint16_t x) {
 }
 
 void GetAltitude() {
-  altitude_read = 2 * analogRead(ALTITUDE_PIN);
+  altitude_read = analogRead(ALTITUDE_PIN) / 2;
   diff_alti = abs(altitude_read - altitude);
   altitude += (altitude_read - altitude) * snapCurve(diff_alti * 0.1);
 
@@ -374,6 +376,8 @@ void SDWriteTask(void *pvParameters) {
     PRINT_COMMA;
     fp.print(propeller_rotation);
     PRINT_COMMA;
+    fp.print(cadence);
+    PRINT_COMMA;
     fp.print(ladder_rotation);
     PRINT_COMMA;
     fp.print(elevator_rotation);
@@ -402,8 +406,8 @@ void StartSDWrite() {
     log_state = false;
   }
   log_start_time = millis();
-  fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Ladder, Elevator");
-  
+  fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Ladder, Elevator");
+
   xTaskCreatePinnedToCore(SDWriteTask, "SDWriteTask", 4096, NULL, 1, NULL, 0);
 }
 void StopSDWrite() {
@@ -510,9 +514,10 @@ void handleGetMeasurementData() {
   json_array["Altitude"] = altitude;
   json_array["AirSpeed"] = air_speed;
   json_array["PropellerRotationSpeed"] = propeller_rotation;
+  json_array["Cadence"] = cadence;
   json_array["Ladder"] = ladder_rotation;
   json_array["Elevator"] = elevator_rotation;
-  
+
   // JSONフォーマットの文字列に変換する
   serializeJson(json_array, json_string, sizeof(json_string));
 
@@ -534,7 +539,7 @@ void InitServer() {
 
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(115200, SERIAL_8N1, 0, 2); // RX = GPIO0, TX = GPIO2
+  Serial1.begin(115200, SERIAL_8N1, 0, 2);  // RX = GPIO0, TX = GPIO2
 
   pinMode(RPM_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
