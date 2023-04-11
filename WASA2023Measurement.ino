@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <SD.h>
@@ -17,7 +18,7 @@ int cadence = 0; // TODO: ケイデンス後日実装
 //#define PRINT_DEBUG_ALTITUDE
 //#define PRINT_DEBUG_TACHO
 //#define PRINT_DEBUG_RPM
-//#define PRINT_DEBUG_CONTROL
+#define PRINT_DEBUG_CONTROL
 //#define PRINR_DEBUG_LOOP
 
 const int RPM_PIN = 4;
@@ -34,10 +35,8 @@ const int SLIDE_VL_PIN = 35;
 const int YAW_PIN = 36;
 const int FREQ_PIN = 39;
 
-#pragma region CONTROL_DATA
 int ladder_rotation = 0;
 int elevator_rotation = 0;
-#pragma endregion
 
 #pragma region DPS310
 Adafruit_DPS310 dps;
@@ -110,6 +109,7 @@ void BuzzerTask(void *pvParameters) {
 void InitBNO() {
   if (!bno.begin()) {
     Serial.println("Failed to find BNO");
+    return;
   }
   Serial.println("BNO OK!");
   bno.setExtCrystalUse(false);
@@ -457,21 +457,21 @@ void PowerTask(void *pvParameters) {
 WebServer server(80);
 
 void handleRoot() {
-  server.send(200, "text/plain", "WASA2023 Measurement");
+  server.send(HTTP_CODE_OK, "text/plain", "WASA2023 Measurement");
 }
 void handleNotFound() {
-  server.send(404, "text/plain", "Not Found");
+  server.send(HTTP_CODE_NOT_FOUND, "text/plain", "Not Found");
 }
 void handleSetGroundPressure() {
   if (server.hasArg("Pressure")) {
     ground_pressure = server.arg("Pressure").toFloat();
   }
-  server.send(200, "text/plain", String(ground_pressure));
+  server.send(HTTP_CODE_OK, "text/plain", String(ground_pressure));
 }
 void handleGetGroundPressure() {
-  server.send(200, "text/plain", String(ground_pressure));
+  server.send(HTTP_CODE_OK, "text/plain", String(ground_pressure));
 }
-void handleSetServoRotation() {  // 操舵から値を受信するため。サーボが動くわけではないので注意
+void handleSetServoRotation() {  // 操舵から値を受信する。サーボが動くわけではないので注意
   if (server.hasArg("Ladder")) {
     ladder_rotation = server.arg("Ladder").toInt();
   }
@@ -484,8 +484,9 @@ void handleSetServoRotation() {  // 操舵から値を受信するため。サ�
 #endif
   String str;
   str += ladder_rotation;
+  str += ", ";
   str += elevator_rotation;
-  server.send(200, "text/plain", str);
+  server.send(HTTP_CODE_OK, "text/plain", str);
 }
 void handleGetMeasurementData() {
   // JSONを作成する
@@ -521,7 +522,7 @@ void handleGetMeasurementData() {
   // JSONフォーマットの文字列に変換する
   serializeJson(json_array, json_string, sizeof(json_string));
 
-  server.send(200, "text/plain", json_string);
+  server.send(HTTP_CODE_OK, "text/plain", json_string);
 }
 
 void InitServer() {

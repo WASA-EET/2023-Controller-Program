@@ -1,5 +1,6 @@
 // #define LOBOT_DEBUG
 // #define MINI_STICK
+// #define PRINT_SERVO_COMMAND
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -398,12 +399,12 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 }
 #pragma endregion
 
-double curvature = 0;
 int ToRotation(int x) {
+  double curvature = (double)ROTATION_MODE;
   if (ROTATION_MODE == ROT_MODE_LINEAR) {
-    return (int)((x - 2048.0) / 2048.0 * 250 + 500);
+    return (int)((x - 2048.0) / 2048.0 * 250);
   } else {
-    return (int)(sinh((x - 2048.0) / (2048.0 / curvature)) / sinh(curvature) * 250 + 500);
+    return (int)(sinh((x - 2048.0) / (2048.0 / curvature)) / sinh(curvature) * 250);
   }
 }
 
@@ -430,9 +431,11 @@ void ServoTask(void *pvParameters) {
     elevator_rotation = ToRotation(elevator_rotation) + GetDefaultAngle(SERVO_ID_ELEVATOR) + trim * step + btnPushCnt[BTN_DEF_UP] - btnPushCnt[BTN_DEF_DOWN];
     LobotSerialServoMove(Serial2, SERVO_ID_LADDER, ladder_rotation, t);
     LobotSerialServoMove(Serial2, SERVO_ID_ELEVATOR, elevator_rotation, t);
-    // Serial.println(ladder_rotation);
-    // Serial.println(elevator_rotation);
-    // Serial.println();
+#ifdef PRINT_SERVO_COMMAND
+    Serial.println(ladder_rotation);
+    Serial.println(elevator_rotation);
+    Serial.println();
+#endif
     delay(t);
   }
 }
@@ -508,18 +511,18 @@ void SendTask(void *pvParameters) {
   while (true) {
     if ((WiFi.status() == WL_CONNECTED)) {
       HTTPClient http;
-      String url = "http://192.168.4.1/SetServoRotation?";
-      url += String("Ladder=") + String(ladder_rotation);
-      url += "&";
-      url += String("Elevator=") + String(elevator_rotation);
-      http.begin(url);
+      String uri = "/SetServoRotation?";
+      uri += String("Ladder=") + String(ladder_rotation);
+      uri += "&";
+      uri += String("Elevator=") + String(elevator_rotation);
+      http.begin("192.168.4.1", 80, uri);
       // start connection and send HTTP header
       int httpCode = http.GET();
-      // httpCode will be negative on error
       if (httpCode > 0) {
         // file found at server
-        if (httpCode == HTTP_CODE_OK) {
-          String payload = http.getString();
+        String payload = http.getString();
+        if (httpCode != HTTP_CODE_OK) {
+          Serial.println(payload);
         }
       } else {
         Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
@@ -558,7 +561,6 @@ void DisplayCurrent() {
 }
 
 void setup() {
-  // put your setup code here, to run once;
   Serial.begin(115200);
   Serial2.begin(115200);
   EEPROM.begin(1024);
@@ -589,8 +591,8 @@ void setup() {
   SPI.setDataMode(0);
   delay(100);
 
-  SetDefaultAngle(2, 500);
-  SetDefaultAngle(3, 500);
+  // SetDefaultAngle(2, 500);
+  // SetDefaultAngle(3, 500);
 
   if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
     WiFi.mode(WIFI_AP_STA);
