@@ -36,29 +36,30 @@ const byte DIGITS[] = {
   0b11110110,  // 9
 };
 
-const int BTN_SIZE = 7;
-const int BTN_PIN[BTN_SIZE] = { 25, 26, 27, 14, 15, 21, 22 };  // ボタン入力ピン
 enum {
-  BTN_TRIM_UP = 0,
-  BTN_TRIM_DOWN = 1,
-  BTN_ROT_MODE = 2,
-  BTN_DEF_LEFT = 3,
-  BTN_DEF_RIGHT = 4,
-  BTN_DEF_UP = 5,
-  BTN_DEF_DOWN = 6
+  BTN_TRIM_UP,
+  BTN_TRIM_DOWN,
+  BTN_ROT_MODE,
+  BTN_DEF_LEFT,
+  BTN_DEF_RIGHT,
+  BTN_DEF_UP,
+  BTN_DEF_DOWN,
+  BTN_MAX
 };
+const int BTN_PIN[BTN_MAX] = { 25, 26, 27, 14, 15, 21, 22 };  // ボタン入力ピン
+
 enum {
-  ROT_MODE_LINEAR = 0,
-  ROT_MODE_SINH1 = 1,
-  ROT_MODE_SINH2 = 2,
-  ROT_MODE_SINH3 = 3,
-  ROT_MODE_MAX = 4
+  ROT_MODE_LINEAR,
+  ROT_MODE_SINH1,
+  ROT_MODE_SINH2,
+  ROT_MODE_SINH3,
+  ROT_MODE_MAX
 };
 static int ROTATION_MODE = 0;
-static unsigned char lastBtnSt[BTN_SIZE] = { 0 };   // 前回ボタン状態
-static unsigned char fixedBtnSt[BTN_SIZE] = { 0 };  // 確定ボタン状態
-static int btnPushCnt[BTN_SIZE] = { 0 };            // カウント数
-static unsigned long smpltmr[BTN_SIZE] = { 0 };     // サンプル時間
+static unsigned char lastBtnSt[BTN_MAX] = { 0 };   // 前回ボタン状態
+static unsigned char fixedBtnSt[BTN_MAX] = { 0 };  // 確定ボタン状態
+static int btnPushCnt[BTN_MAX] = { 0 };            // カウント数
+static unsigned long smpltmr[BTN_MAX] = { 0 };     // サンプル時間
 
 const int SERVO_ID_LADDER = 2;
 const int SERVO_ID_ELEVATOR = 3;
@@ -629,7 +630,7 @@ void loop() {
   if (wifi_status) {
     server.handleClient();
   }
-  for (int i = 0; i < BTN_SIZE; i++)
+  for (int i = 0; i < BTN_MAX; i++)
     btnEvent(i);
 
   ROTATION_MODE = btnPushCnt[BTN_ROT_MODE] % ROT_MODE_MAX;

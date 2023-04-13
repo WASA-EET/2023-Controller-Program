@@ -8,9 +8,16 @@
 #include <Adafruit_DPS310.h>
 #include <Adafruit_BNO055.h>
 
-int cadence = 0; // TODO: ケイデンス後日実装
+int cadence = 0;  // TODO: ケイデンス後日実装
 
 #define ENABLE_ALERT
+int buzzer_code = 0;
+enum {
+  BUZZER_NONE,
+  BUZZER_LOG_ON,
+  BUZZER_LOG_OFF,
+  BUZZER_MAX
+};
 
 //#define PRINT_DEBUG_DPS
 //#define PRINT_DEBUG_BNO
@@ -18,7 +25,7 @@ int cadence = 0; // TODO: ケイデンス後日実装
 //#define PRINT_DEBUG_ALTITUDE
 //#define PRINT_DEBUG_TACHO
 //#define PRINT_DEBUG_RPM
-#define PRINT_DEBUG_CONTROL
+//#define PRINT_DEBUG_CONTROL
 //#define PRINR_DEBUG_LOOP
 
 const int RPM_PIN = 4;
@@ -97,15 +104,7 @@ void GetDPS() {
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 float roll = 0, pitch = 0, yaw = 0;
 float standard_yaw = 0;
-void BuzzerTask(void *pvParameters) {
-  int alert = 0;
-  while (true) {
-    if (abs(roll) > 5.0 || abs(pitch) > 5.0) alert++;
-    else alert = 0;
-    dacWrite(BUZZER_PIN, alert >= 3 ? analogRead(SLIDE_VL_PIN) / 16 : 0);
-    delay(1000);
-  }
-}
+
 void InitBNO() {
   if (!bno.begin()) {
     Serial.println("Failed to find BNO");
@@ -324,9 +323,13 @@ void InitRPM() {
 #pragma region LOG
 bool log_state;
 uint32_t log_start_time;
-static unsigned char lastBtnSt = 0;   // 前回ボタン状態
-static unsigned char fixedBtnSt = 0;  // 確定ボタン状態
-static unsigned long smpltmr = 0;     // サンプル時間
+/*
+unsigned char lastBtnSt = 0;   // 前回ボタン状態
+unsigned char fixedBtnSt = 0;  // 確定ボタン状態
+unsigned long smpltmr = 0;     // サンプル時間
+*/
+long log_sw_start = 0;
+long log_sw_time = 0;
 File fp;
 #define PRINT_COMMA fp.print(", ")
 
@@ -387,6 +390,7 @@ void SDWriteTask(void *pvParameters) {
   }
   fp.close();
   Serial.println("File closed");
+  buzzer_code = BUZZER_LOG_OFF;
   vTaskDelete(NULL);
 }
 void StartSDWrite() {
@@ -401,9 +405,12 @@ void StartSDWrite() {
   if (fp) {
     Serial.println(path + " Opened");
     log_state = true;
+    buzzer_code = BUZZER_LOG_ON;
   } else {
     Serial.println(path + " Open Failed");
     log_state = false;
+    buzzer_code = BUZZER_LOG_OFF;
+    return;
   }
   log_start_time = millis();
   fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Ladder, Elevator");
@@ -414,6 +421,7 @@ void StopSDWrite() {
   log_state = false;
 }
 void UpdateLogState() {
+  /*
   if (millis() - smpltmr < 10) return;
   smpltmr = millis();
 
@@ -431,6 +439,23 @@ void UpdateLogState() {
 
   if (btnSt) {
     fixedBtnSt = btnSt;
+  }
+  */
+
+  // 1秒以上押し続けたらログ収集を開始（または停止）する
+  if (digitalRead(LOG_SW_PIN) == LOW) {
+    if (log_sw_start == 0)
+      log_sw_start = millis();
+    log_sw_time = millis() - log_sw_start;
+
+    if (log_sw_time > 1000) {
+      log_sw_start = millis() + 1000000; // 連続で反応しないようにする
+      if (!log_state) StartSDWrite();
+      else StopSDWrite();
+    }
+  } else {
+    log_sw_time = 0;
+    log_sw_start = 0;
   }
 
   digitalWrite(LOG_LED_PIN, log_state ? HIGH : LOW);
@@ -537,6 +562,37 @@ void InitServer() {
   server.begin();
 }
 #pragma endregion
+
+void BuzzerTask(void *pvParameters) {
+  int alert = 0;
+  while (true) {
+    // ログの記録開始、終了時に音を鳴らした方が分かりやすいかなぁと
+    if (buzzer_code == BUZZER_LOG_ON) {
+      Serial.println("Buzzer log on");
+      for (int i = 0; i < 2; i++) {
+        dacWrite(BUZZER_PIN, 255);
+        vTaskDelay(400);
+        dacWrite(BUZZER_PIN, 0);
+        vTaskDelay(100);
+      }
+    }
+    if (buzzer_code == BUZZER_LOG_OFF) {
+      for (int i = 0; i < 4; i++) {
+        dacWrite(BUZZER_PIN, 255);
+        vTaskDelay(200);
+        dacWrite(BUZZER_PIN, 0);
+        vTaskDelay(100);
+      }
+    }
+    if (buzzer_code != BUZZER_NONE)
+      buzzer_code = BUZZER_NONE;
+
+    if (abs(roll) > 5.0 || abs(pitch) > 5.0) alert++;
+    else alert = 0;
+    dacWrite(BUZZER_PIN, alert >= 30 ? analogRead(SLIDE_VL_PIN) / 16 : 0);
+    delay(100);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
