@@ -323,13 +323,7 @@ void InitRPM() {
 #pragma region LOG
 bool log_state;
 uint32_t log_start_time;
-/*
-unsigned char lastBtnSt = 0;   // 前回ボタン状態
-unsigned char fixedBtnSt = 0;  // 確定ボタン状態
-unsigned long smpltmr = 0;     // サンプル時間
-*/
-long log_sw_start = 0;
-long log_sw_time = 0;
+uint32_t log_sw_start = 0; // スイッチを押し始めた時間
 File fp;
 #define PRINT_COMMA fp.print(", ")
 
@@ -421,32 +415,11 @@ void StopSDWrite() {
   log_state = false;
 }
 void UpdateLogState() {
-  /*
-  if (millis() - smpltmr < 10) return;
-  smpltmr = millis();
-
-  int btnSt = digitalRead(LOG_SW_PIN);
-  bool cmp = (btnSt == lastBtnSt);
-  lastBtnSt = btnSt;
-
-  if (!cmp) return;
-
-  if (!btnSt && (btnSt != fixedBtnSt)) {
-    fixedBtnSt = btnSt;
-    if (!log_state) StartSDWrite();
-    else StopSDWrite();
-  }
-
-  if (btnSt) {
-    fixedBtnSt = btnSt;
-  }
-  */
-
   // 1秒以上押し続けたらログ収集を開始（または停止）する
   if (digitalRead(LOG_SW_PIN) == LOW) {
     if (log_sw_start == 0)
       log_sw_start = millis();
-    log_sw_time = millis() - log_sw_start;
+    long log_sw_time = millis() - log_sw_start; // スイッチを押している時間
 
     if (log_sw_time > 1000) {
       log_sw_start = millis() + 1000000; // 連続で反応しないようにする
@@ -454,7 +427,6 @@ void UpdateLogState() {
       else StopSDWrite();
     }
   } else {
-    log_sw_time = 0;
     log_sw_start = 0;
   }
 
@@ -467,14 +439,6 @@ void InitSD() {
     return;
   }
   Serial.println("SD OK!");
-}
-#pragma endregion
-
-#pragma region POWER
-void PowerTask(void *pvParameters) {
-  while (true) {
-    delay(1000);
-  }
 }
 #pragma endregion
 
