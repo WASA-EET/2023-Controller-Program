@@ -8,7 +8,8 @@
 #include <Adafruit_DPS310.h>
 #include <Adafruit_BNO055.h>
 
-int cadence = 0;  // TODO: ケイデンス後日実装
+static int cadence = 0;
+static int power = 0;
 
 #define ENABLE_ALERT
 int buzzer_code = 0;
@@ -87,7 +88,7 @@ void GetDPS() {
     Serial.println(" hPa");
 #endif
   }
-  dps_altitude = dps.readAltitude(ground_pressure);
+  dps_altitude = dps.readAltitude(ground_pressure) * 100;
 #ifdef PRINT_DEBUG_DPS
   Serial.print("Altitude(DPS310) = ");
   Serial.print(dps_altitude);
@@ -103,6 +104,7 @@ void GetDPS() {
 #pragma region BNO055
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 float roll = 0, pitch = 0, yaw = 0;
+float standard_pitch = 0;
 float standard_yaw = 0;
 
 void InitBNO() {
@@ -120,7 +122,7 @@ void GetBNO() {
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
   yaw = euler.x();
-  pitch = euler.y() * -1;
+  pitch = euler.y() * -1 + standard_pitch;
   roll = euler.z();
 #ifdef PRINT_DEBUG_BNO
   Serial.print("DIR_xyz:");
@@ -208,7 +210,8 @@ double snapCurve(uint16_t x) {
 }
 
 void GetAltitude() {
-  altitude_read = analogRead(ALTITUDE_PIN) / 2;
+  // altitude_read = analogRead(ALTITUDE_PIN) / 2; // アナログ入力で読み取る場合
+  altitude_read = pulseIn(ALTITUDE_PIN, HIGH, 124000) / 58.0; // パルス入力で読み取る場合
   diff_alti = abs(altitude_read - altitude);
   altitude += (altitude_read - altitude) * snapCurve(diff_alti * 0.1);
 
@@ -240,7 +243,7 @@ void GetTacho() {
     noInterrupts();
     if (tach_interrupts > 5) {
       tach_rotation = (uint32_t)((double)1000000000.0 * ((double)tach_interrupts / tach_delta_time));
-      air_speed = (tach_rotation * tach_rotation * -7.0 * pow(10, -16.0) + tach_rotation * 3.0 * pow(10, -7.0)) * 10.0;
+      air_speed = (tach_rotation * tach_rotation * -7.0 * pow(10, -16.0) + tach_rotation * 3.0 * pow(10, -7.0)) * 1.0;
     } else {
       tach_rotation = 0;
       air_speed = 0;
@@ -375,6 +378,8 @@ void SDWriteTask(void *pvParameters) {
     PRINT_COMMA;
     fp.print(cadence);
     PRINT_COMMA;
+    fp.print(power);
+    PRINT_COMMA;
     fp.print(ladder_rotation);
     PRINT_COMMA;
     fp.print(elevator_rotation);
@@ -407,7 +412,8 @@ void StartSDWrite() {
     return;
   }
   log_start_time = millis();
-  fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Ladder, Elevator");
+  ground_pressure = pressure;
+  fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Power, Ladder, Elevator");
 
   xTaskCreatePinnedToCore(SDWriteTask, "SDWriteTask", 4096, NULL, 1, NULL, 0);
 }
@@ -505,6 +511,7 @@ void handleGetMeasurementData() {
   json_array["AirSpeed"] = air_speed;
   json_array["PropellerRotationSpeed"] = propeller_rotation;
   json_array["Cadence"] = cadence;
+  json_array["Power"] = power;
   json_array["Ladder"] = ladder_rotation;
   json_array["Elevator"] = elevator_rotation;
 
@@ -551,16 +558,27 @@ void BuzzerTask(void *pvParameters) {
     if (buzzer_code != BUZZER_NONE)
       buzzer_code = BUZZER_NONE;
 
-    if (abs(roll) > 5.0 || abs(pitch) > 5.0) alert++;
+    if (abs(roll) > 10.0) alert++;
     else alert = 0;
-    dacWrite(BUZZER_PIN, alert >= 30 ? analogRead(SLIDE_VL_PIN) / 16 : 0);
+    dacWrite(BUZZER_PIN, alert >= 1 ? analogRead(SLIDE_VL_PIN) / 16 : 0);
     delay(100);
+  }
+}
+
+void PowerTask(void *pvParameters) {
+  while (true) {
+    if (Serial1.read() == 255) {
+      uint8_t a = Serial1.read(), b = Serial1.read();
+      power = (a << 8) | b;
+      cadence = Serial1.read();
+    }
+    delay(50);
   }
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(115200, SERIAL_8N1, 0, 2);  // RX = GPIO0, TX = GPIO2
+  Serial1.begin(115200, SERIAL_8N1, 2, 0);  // RX = GPIO2, TX = GPIO0
 
   pinMode(RPM_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
@@ -570,7 +588,7 @@ void setup() {
   pinMode(LOG_SW_PIN, INPUT_PULLUP);
   pinMode(TACHO_PIN[0], INPUT_PULLUP);
   pinMode(TACHO_PIN[1], INPUT_PULLUP);
-  pinMode(ALTITUDE_PIN, ANALOG);
+  pinMode(ALTITUDE_PIN, INPUT); // PULSE入力ならINPUT, アナログ入力ならANALOG
   pinMode(SLIDE_VL_PIN, ANALOG);
   pinMode(YAW_PIN, ANALOG);
   pinMode(FREQ_PIN, ANALOG);
@@ -591,9 +609,9 @@ void setup() {
   delay(100);
 #ifdef ENABLE_ALERT
   xTaskCreatePinnedToCore(BuzzerTask, "BuzzerTask", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(PowerTask, "PowerTask", 4096, NULL, 1, NULL, 0);
   delay(100);
 #endif
-  xTaskCreatePinnedToCore(PowerTask, "PowerTask", 4096, NULL, 1, NULL, 0);
   delay(100);
 }
 

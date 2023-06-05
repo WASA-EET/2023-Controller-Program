@@ -8,6 +8,42 @@
 #include <SPI.h>
 #include <EEPROM.h>
 
+const char index_html_head[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML>
+<html>
+
+<head>
+    <title>Servo default position set page</title>
+    <h1>Servo default position set page</h1>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script>
+        function submitMessage(msg) {
+            alert(msg);
+            setTimeout(function () { document.location.reload(false); }, 500);
+        }
+    </script>
+</head>
+)rawliteral";
+
+const char index_html_tail[] PROGMEM = R"rawliteral(
+<body>
+    <fieldset>     
+        <legend>Default degree</legend>
+        <form action="/PostLadderDefault" target="hidden-form">
+            Ladder (0~1000) <input type="text" name="Angle">
+            <input type="submit" value="Change" onclick="submitMessage('Changed ladder default position')">
+        </form><br>
+        <form action="/PostElevatorDefault" target="hidden-form">
+            Elevator (0~1000) <input type="text" name="Angle">
+            <input type="submit" value="Change" onclick="submitMessage('Change elevator default position')">
+        </form><br>
+    </fieldset>
+    <iframe style="display:none" name="hidden-form"></iframe>
+</body>
+
+</html>
+)rawliteral";
+
 const int BOOT_PIN = 0;
 
 const int WIFI_STATUS_SW_PIN = 19;
@@ -55,23 +91,27 @@ enum {
   ROT_MODE_SINH3,
   ROT_MODE_MAX
 };
+
 static int ROTATION_MODE = 0;
 static unsigned char lastBtnSt[BTN_MAX] = { 0 };   // 前回ボタン状態
 static unsigned char fixedBtnSt[BTN_MAX] = { 0 };  // 確定ボタン状態
 static int btnPushCnt[BTN_MAX] = { 0 };            // カウント数
 static unsigned long smpltmr[BTN_MAX] = { 0 };     // サンプル時間
 
-const int SERVO_ID_LADDER = 2;
-const int SERVO_ID_ELEVATOR = 3;
-const int SERVO_BROADCAST = 254;
+const int SERVO_ID_LADDER = 3;
+const int SERVO_ID_ELEVATOR = 2;
+const int SERVO_BROADCAST = 254; // IDに254を指定するとすべてのサーボに指令を送ることができる
 
 const int JOYSTICK_NEUTRAL = 2048;
 const int SERVO_FREQUENCY = 100;
 
+const int LADDER_RANGE = 250; // ラダーの可動域（1につき0.24度）
+const int ELEVATOR_RANGE = 250; // エレベーターの可動域
+
 static int ladder_rotation = 0;
 static int elevator_rotation = 0;
-static int trim = 0;
-static int step = 4;
+int trim_position[10] = { 0, 20, 40, 60, 80, 100, 120, 140, 160, 180 };
+int trim = 0;
 
 WebServer server(80);
 static int wifi_status;
@@ -400,12 +440,12 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 }
 #pragma endregion
 
-int ToRotation(int x) {
+int ToRotation(int x, int range) {
   double curvature = (double)ROTATION_MODE;
   if (ROTATION_MODE == ROT_MODE_LINEAR) {
-    return (int)((x - 2048.0) / 2048.0 * 250);
+    return (int)((x - 2048.0) / 2048.0 * (range / 2));
   } else {
-    return (int)(sinh((x - 2048.0) / (2048.0 / curvature)) / sinh(curvature) * 250);
+    return (int)(sinh((x - 2048.0) / (2048.0 / curvature)) / sinh(curvature) * (range / 2));
   }
 }
 
@@ -427,9 +467,12 @@ void ServoTask(void *pvParameters) {
 #else
     ladder_rotation = digitalRead(LADDER_CHECK_PIN) == LOW ? analogRead(LADDER_STICK_PIN) : JOYSTICK_NEUTRAL;
     elevator_rotation = digitalRead(ELEVATOR_CHECK_PIN) == LOW ? analogRead(ELEVATOR_STICK_PIN) : JOYSTICK_NEUTRAL;
+
+    // ladder_rotation = 4096 - ladder_rotation;
+    // elevator_rotation = 4096 - elevator_rotation;
 #endif
-    ladder_rotation = ToRotation(ladder_rotation) + GetDefaultAngle(SERVO_ID_LADDER) + btnPushCnt[BTN_DEF_LEFT] - btnPushCnt[BTN_DEF_RIGHT];
-    elevator_rotation = ToRotation(elevator_rotation) + GetDefaultAngle(SERVO_ID_ELEVATOR) + trim * step + btnPushCnt[BTN_DEF_UP] - btnPushCnt[BTN_DEF_DOWN];
+    ladder_rotation = ToRotation(ladder_rotation, LADDER_RANGE) + GetDefaultAngle(SERVO_ID_LADDER) + btnPushCnt[BTN_DEF_LEFT] - btnPushCnt[BTN_DEF_RIGHT];
+    elevator_rotation = ToRotation(elevator_rotation, ELEVATOR_RANGE) + GetDefaultAngle(SERVO_ID_ELEVATOR) + trim_position[trim] + btnPushCnt[BTN_DEF_UP] - btnPushCnt[BTN_DEF_DOWN];
     LobotSerialServoMove(Serial2, SERVO_ID_LADDER, ladder_rotation, t);
     LobotSerialServoMove(Serial2, SERVO_ID_ELEVATOR, elevator_rotation, t);
 #ifdef PRINT_SERVO_COMMAND
@@ -470,27 +513,31 @@ int GetDefaultAngle(unsigned char ID) {
 
 #pragma region SERVER_HANDLE
 void handleRoot() {
-  server.send(200, "text/plain", "WASA2023 Control");
+  String html_default_degree = String("Current default position\n") 
+  + "Ladder default position: " + String(GetDefaultAngle(SERVO_ID_LADDER)) + "\n"
+  + "Elevator default position: " + String(GetDefaultAngle(SERVO_ID_ELEVATOR));
+  String html_text = index_html_head + html_default_degree + index_html_tail;
+  server.send(200, "text/html", html_text);
 }
 
 void handleNotFound() {
   server.send(404, "text/plain", "Not Found");
 }
 
-void handleSetDefaultAngle() {
-  if (server.hasArg("ID") && server.hasArg("Angle")) {
-    unsigned char id = server.arg("ID").toInt();
+void handleSetLadderDefaultAngle() {
+  if (server.hasArg("Angle")) {
     short angle = server.arg("Angle").toInt();
-    SetDefaultAngle(id, angle);
+    SetDefaultAngle(SERVO_ID_LADDER, angle);
     server.send(200, "text/plain", "Succeed");
   }
   server.send(200, "text/plain", "Failed");
 }
 
-void handleGetDefaultAngle() {
-  if (server.hasArg("ID")) {
-    unsigned char id = server.arg("ID").toInt();
-    server.send(200, "text/plain", String(GetDefaultAngle(id)));
+void handleSetElevatorDefaultAngle() {
+  if (server.hasArg("Angle")) {
+    short angle = server.arg("Angle").toInt();
+    SetDefaultAngle(SERVO_ID_ELEVATOR, angle);
+    server.send(200, "text/plain", "Succeed");
   }
   server.send(200, "text/plain", "Failed");
 }
@@ -599,8 +646,9 @@ void setup() {
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("WASA2023Control", "wasa2023");
     server.on("/", handleRoot);
-    server.on("/PostDefault", handleSetDefaultAngle);
-    server.on("/GetDefault", handleGetDefaultAngle);
+    server.on("/PostLadderDefault", handleSetLadderDefaultAngle);
+    server.on("/PostElevatorDefault", handleSetElevatorDefaultAngle);
+    // server.on("/GetDefault", handleGetDefaultAngle);
     server.on("/PostTorque", handleSetTorque);
     server.onNotFound(handleNotFound);
     server.begin();
@@ -641,9 +689,11 @@ void loop() {
     if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
       LobotSerialServoUnload(Serial2, SERVO_ID_LADDER);
       LobotSerialServoUnload(Serial2, SERVO_ID_ELEVATOR);
+      delay(100);
     } else {
       LobotSerialServoLoad(Serial2, SERVO_ID_LADDER);
       LobotSerialServoLoad(Serial2, SERVO_ID_ELEVATOR);
+      delay(100);
     }
   }
 }
