@@ -104,6 +104,7 @@ void GetDPS() {
 #pragma region BNO055
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 float roll = 0, pitch = 0, yaw = 0;
+float standard_roll = 0;
 float standard_pitch = 0;
 float standard_yaw = 0;
 
@@ -116,13 +117,13 @@ void InitBNO() {
   bno.setExtCrystalUse(false);
 }
 void GetBNO() {
-  standard_yaw = (analogRead(YAW_PIN) - 2048) / 2048.0 * 180.0;
+  //standard_yaw = (analogRead(YAW_PIN) - 2048) / 2048.0 * 180.0;
 
   // センサフュージョンによる方向推定値の取得と表示
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
   yaw = euler.x();
-  pitch = euler.y() * -1 + standard_pitch;
+  pitch = euler.y() * -1;
   roll = euler.z();
 #ifdef PRINT_DEBUG_BNO
   Serial.print("DIR_xyz:");
@@ -356,9 +357,9 @@ void SDWriteTask(void *pvParameters) {
     PRINT_COMMA;
     fp.print(gps_speed);
     PRINT_COMMA;
-    fp.print(roll);
+    fp.print(roll - standard_roll);
     PRINT_COMMA;
-    fp.print(pitch);
+    fp.print(pitch - standard_pitch);
     PRINT_COMMA;
     fp.print(yaw - standard_yaw);
     PRINT_COMMA;
@@ -411,8 +412,12 @@ void StartSDWrite() {
     buzzer_code = BUZZER_LOG_OFF;
     return;
   }
-  log_start_time = millis();
-  ground_pressure = pressure;
+  log_start_time = millis();　　          
+  //基準値の設定
+  ground_pressure = pressure; 
+  standard_roll = roll;
+  standard_pitch = pitch;
+  standard_yaw = yaw;
   fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Power, Ladder, Elevator");
 
   xTaskCreatePinnedToCore(SDWriteTask, "SDWriteTask", 4096, NULL, 1, NULL, 0);
@@ -500,8 +505,8 @@ void handleGetMeasurementData() {
   json_array["GPSAltitude"] = gps_altitude;
   json_array["GPSCourse"] = gps_course;
   json_array["GPSSpeed"] = gps_speed;
-  json_array["Roll"] = roll;
-  json_array["Pitch"] = pitch;
+  json_array["Roll"] = roll - standard_roll;
+  json_array["Pitch"] = pitch - standard_pitch;
   json_array["Yaw"] = yaw - standard_yaw;
   json_array["Temperature"] = temperature;
   json_array["Pressure"] = pressure;
