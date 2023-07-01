@@ -441,6 +441,9 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 #pragma endregion
 
 int ToRotation(int x, int range) {
+  if ( x >= JOYSTICK_NEUTRAL - 100 && x <= JOYSTICK_NEUTRAL + 100 ){
+      x = JOYSTICK_NEUTRAL;
+}                                                                                                //誤差をなくす
   double curvature = (double)ROTATION_MODE;
   if (ROTATION_MODE == ROT_MODE_LINEAR) {
     return (int)((x - 2048.0) / 2048.0 * (range / 2));
