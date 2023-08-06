@@ -12,7 +12,17 @@ static int cadence = 0;
 static int power = 0;
 
 #define ENABLE_ALERT
-int buzzer_code = 0;
+// #define ENABLE_POWER
+
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML>
+<html>
+
+</html>
+)rawliteral";
+
+
+static int buzzer_code = 0;
 enum {
   BUZZER_NONE,
   BUZZER_LOG_ON,
@@ -40,13 +50,12 @@ const int BUZZER_PIN = 25;
 const int LOG_LED_PIN = 26;
 const int LOG_SW_PIN = 27;
 const int SLIDE_VL_PIN = 35;
-const int YAW_PIN = 36;
-const int FREQ_PIN = 39;
 
 int ladder_rotation = 0;
 int elevator_rotation = 0;
 
 #pragma region DPS310
+// 気圧計による気圧、温度の測定及び高度の計算
 Adafruit_DPS310 dps;
 Adafruit_Sensor *dps_temp = dps.getTemperatureSensor();
 Adafruit_Sensor *dps_pressure = dps.getPressureSensor();
@@ -102,6 +111,7 @@ void GetDPS() {
 #pragma endregion
 
 #pragma region BNO055
+// 9軸センサによる姿勢角の計算
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 float roll = 0, pitch = 0, yaw = 0;
 float standard_roll = 0;
@@ -117,8 +127,6 @@ void InitBNO() {
   bno.setExtCrystalUse(false);
 }
 void GetBNO() {
-  //standard_yaw = (analogRead(YAW_PIN) - 2048) / 2048.0 * 180.0;
-
   // センサフュージョンによる方向推定値の取得と表示
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
@@ -138,6 +146,7 @@ void GetBNO() {
 #pragma endregion
 
 #pragma region GPS
+// GPSの測定
 #define GPSSerial Serial2
 TinyGPSPlus gps;
 uint32_t gps_latitude = 0;   // 緯度 10000000倍 359752780
@@ -201,6 +210,7 @@ void GetGPS() {
 #pragma endregion
 
 #pragma region ALTITUDE
+// 超音波センサによる高度計のコード
 uint16_t altitude = 1000;    // 高度(cm)
 uint16_t altitude_read = 0;  // 高度(実際に読み取った値)
 uint16_t diff_alti = 0;
@@ -212,7 +222,7 @@ double snapCurve(uint16_t x) {
 
 void GetAltitude() {
   // altitude_read = analogRead(ALTITUDE_PIN) / 2; // アナログ入力で読み取る場合
-  altitude_read = pulseIn(ALTITUDE_PIN, HIGH, 124000) / 58.0; // パルス入力で読み取る場合
+  altitude_read = pulseIn(ALTITUDE_PIN, HIGH, 124000) / 58.0;  // パルス入力で読み取る場合
   diff_alti = abs(altitude_read - altitude);
   altitude += (altitude_read - altitude) * snapCurve(diff_alti * 0.1);
 
@@ -223,6 +233,7 @@ void GetAltitude() {
 #pragma endregion
 
 #pragma region TACHO
+// 対気速度計のコード
 hw_timer_t *timer = NULL;
 
 volatile uint16_t tach_interrupts = 0;
@@ -276,6 +287,7 @@ void InitTacho() {
 #pragma endregion
 
 #pragma region ROTATION_SPEED
+// 回転数系のコード
 volatile uint16_t propeller_interrupts = 0;
 uint32_t propeller_rotation = 106666;
 uint32_t propeller_last_time = 0;
@@ -296,7 +308,6 @@ void attachPropeller() {
 void detachPropeller() {
   detachInterrupt(digitalPinToInterrupt(RPM_PIN));
 }
-
 
 void GetRPM() {
   propeller_delta_time = micros() - propeller_last_time;
@@ -325,16 +336,15 @@ void InitRPM() {
 #pragma endregion
 
 #pragma region LOG
+// ログをmicroSDに保存するためのシステム
 bool log_state;
 uint32_t log_start_time;
-uint32_t log_sw_start = 0; // スイッチを押し始めた時間
+uint32_t log_sw_start = 0;  // スイッチを押し始めた時間
 File fp;
 #define PRINT_COMMA fp.print(", ")
 
 void SDWriteTask(void *pvParameters) {
   while (fp && log_state) {
-    fp.print(millis() - log_start_time);
-    PRINT_COMMA;
     fp.print(gps_year);
     PRINT_COMMA;
     fp.print(gps_month);
@@ -385,6 +395,8 @@ void SDWriteTask(void *pvParameters) {
     PRINT_COMMA;
     fp.print(elevator_rotation);
     PRINT_COMMA;
+    fp.print(millis() - log_start_time);
+    PRINT_COMMA;
     fp.println();
     delay(50);
   }
@@ -412,13 +424,13 @@ void StartSDWrite() {
     buzzer_code = BUZZER_LOG_OFF;
     return;
   }
-  log_start_time = millis();　　          
-  //基準値の設定
-  ground_pressure = pressure; 
+  log_start_time = millis();
+  // 基準値の設定
+  ground_pressure = pressure;
   standard_roll = roll;
   standard_pitch = pitch;
   standard_yaw = yaw;
-  fp.println("RunningTime, Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Power, Ladder, Elevator");
+  fp.println("Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Power, Ladder, Elevator, RunningTime");
 
   xTaskCreatePinnedToCore(SDWriteTask, "SDWriteTask", 4096, NULL, 1, NULL, 0);
 }
@@ -430,10 +442,10 @@ void UpdateLogState() {
   if (digitalRead(LOG_SW_PIN) == LOW) {
     if (log_sw_start == 0)
       log_sw_start = millis();
-    long log_sw_time = millis() - log_sw_start; // スイッチを押している時間
+    long log_sw_time = millis() - log_sw_start;  // スイッチを押している時間
 
     if (log_sw_time > 1000) {
-      log_sw_start = millis() + 1000000; // 連続で反応しないようにする
+      log_sw_start = millis() + 1000000;  // 連続で反応しないようにする
       if (!log_state) StartSDWrite();
       else StopSDWrite();
     }
@@ -454,10 +466,11 @@ void InitSD() {
 #pragma endregion
 
 #pragma region SERVER
+// HTTPサーバーでの処理
 WebServer server(80);
 
 void handleRoot() {
-  server.send(HTTP_CODE_OK, "text/plain", "WASA2023 Measurement");
+  server.send(HTTP_CODE_OK, "text/html", index_html);
 }
 void handleNotFound() {
   server.send(HTTP_CODE_NOT_FOUND, "text/plain", "Not Found");
@@ -493,7 +506,6 @@ void handleGetMeasurementData() {
   StaticJsonDocument<JSON_OBJECT_SIZE(50)> json_array;
   char json_string[4096];
   // JSONに変換したいデータを連想配列で指定する
-  json_array["RunningTime"] = millis();
   json_array["Year"] = gps_year;
   json_array["Month"] = gps_month;
   json_array["Day"] = gps_day;
@@ -519,6 +531,7 @@ void handleGetMeasurementData() {
   json_array["Power"] = power;
   json_array["Ladder"] = ladder_rotation;
   json_array["Elevator"] = elevator_rotation;
+  json_array["RunningTime"] = millis();
 
   // JSONフォーマットの文字列に変換する
   serializeJson(json_array, json_string, sizeof(json_string));
@@ -583,7 +596,6 @@ void PowerTask(void *pvParameters) {
 
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(115200, SERIAL_8N1, 2, 0);  // RX = GPIO2, TX = GPIO0
 
   pinMode(RPM_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
@@ -593,10 +605,8 @@ void setup() {
   pinMode(LOG_SW_PIN, INPUT_PULLUP);
   pinMode(TACHO_PIN[0], INPUT_PULLUP);
   pinMode(TACHO_PIN[1], INPUT_PULLUP);
-  pinMode(ALTITUDE_PIN, INPUT); // PULSE入力ならINPUT, アナログ入力ならANALOG
+  pinMode(ALTITUDE_PIN, INPUT);  // PULSE入力ならINPUT, アナログ入力ならANALOG
   pinMode(SLIDE_VL_PIN, ANALOG);
-  pinMode(YAW_PIN, ANALOG);
-  pinMode(FREQ_PIN, ANALOG);
 
   InitDPS();
   delay(100);
@@ -614,8 +624,11 @@ void setup() {
   delay(100);
 #ifdef ENABLE_ALERT
   xTaskCreatePinnedToCore(BuzzerTask, "BuzzerTask", 4096, NULL, 1, NULL, 0);
-  xTaskCreatePinnedToCore(PowerTask, "PowerTask", 4096, NULL, 1, NULL, 0);
   delay(100);
+#endif
+#ifdef ENABLE_POWER
+  Serial1.begin(115200, SERIAL_8N1, 2, 0);  // RX = GPIO2, TX = GPIO0
+  xTaskCreatePinnedToCore(PowerTask, "PowerTask", 4096, NULL, 1, NULL, 0);
 #endif
   delay(100);
 }
@@ -629,7 +642,6 @@ void loop() {
   GetTacho();
   GetRPM();
   UpdateLogState();
-  delay((int)(analogRead(FREQ_PIN) / 4.096));
 #ifdef PRINR_DEBUG_LOOP
   Serial.printf("Current Time: %d\n", millis());
 #endif
