@@ -1,5 +1,4 @@
 // #define LOBOT_DEBUG
-// #define MINI_STICK
 // #define PRINT_SERVO_COMMAND
 
 #include <WiFi.h>
@@ -51,10 +50,8 @@ const int WIFI_STATUS_LED_PIN = 4;
 
 const int LADDER_STICK_PIN = 33;  // 32 or 33
 const int LADDER_CHECK_PIN = 13;
-const int LADDER_MINI_STICK_PIN = 39;
 const int ELEVATOR_STICK_PIN = 34;  // 34 or 35
 const int ELEVATOR_CHECK_PIN = 12;
-const int ELEVATOR_MINI_STICK_PIN = 36;
 
 const int SCK_PIN = 18;   // CLK
 const int LATCH_PIN = 5;  // CE
@@ -100,13 +97,13 @@ static unsigned long smpltmr[BTN_MAX] = { 0 };     // サンプル時間
 
 const int SERVO_ID_LADDER = 3;
 const int SERVO_ID_ELEVATOR = 2;
-const int SERVO_BROADCAST = 254; // IDに254を指定するとすべてのサーボに指令を送ることができる
+const int SERVO_BROADCAST = 254;  // IDに254を指定するとすべてのサーボに指令を送ることができる
 
 const int JOYSTICK_NEUTRAL = 2048;
 const int SERVO_FREQUENCY = 100;
 
-const int LADDER_RANGE = 250; // ラダーの可動域（1につき0.24度）
-const int ELEVATOR_RANGE = 250; // エレベーターの可動域
+const int LADDER_RANGE = 250;    // ラダーの可動域（1につき0.24度）
+const int ELEVATOR_RANGE = 250;  // エレベーターの可動域
 
 static int ladder_rotation = 0;
 static int elevator_rotation = 0;
@@ -440,10 +437,13 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 }
 #pragma endregion
 
+// 入力数値を引数として非線形に変換した値に変換する
+// 曲率はROTATION_MODEの数値で決定されている
 int ToRotation(int x, int range) {
-  if ( x >= JOYSTICK_NEUTRAL - 100 && x <= JOYSTICK_NEUTRAL + 100 ){
-      x = JOYSTICK_NEUTRAL;
-}                                                                                                //誤差をなくす
+  // 中央付近での誤差を無くす
+  if (x >= JOYSTICK_NEUTRAL - 256 && x <= JOYSTICK_NEUTRAL + 256) {
+    x = JOYSTICK_NEUTRAL;
+  }
   double curvature = (double)ROTATION_MODE;
   if (ROTATION_MODE == ROT_MODE_LINEAR) {
     return (int)((x - 2048.0) / 2048.0 * (range / 2));
@@ -452,6 +452,7 @@ int ToRotation(int x, int range) {
   }
 }
 
+// 角度を計算してひたすらサーボに動作指令を出し続ける
 void ServoTask(void *pvParameters) {
   while (true) {
     trim = (btnPushCnt[BTN_TRIM_UP] - btnPushCnt[BTN_TRIM_DOWN]);
@@ -464,16 +465,10 @@ void ServoTask(void *pvParameters) {
       trim = 0;
     }
     int t = 1000 / SERVO_FREQUENCY;
-#ifdef MINI_STICK
-    ladder_rotation = analogRead(LADDER_MINI_STICK_PIN);
-    elevator_rotation = analogRead(ELEVATOR_MINI_STICK_PIN);
-#else
+
     ladder_rotation = digitalRead(LADDER_CHECK_PIN) == LOW ? analogRead(LADDER_STICK_PIN) : JOYSTICK_NEUTRAL;
     elevator_rotation = digitalRead(ELEVATOR_CHECK_PIN) == LOW ? analogRead(ELEVATOR_STICK_PIN) : JOYSTICK_NEUTRAL;
 
-    // ladder_rotation = 4096 - ladder_rotation;
-    // elevator_rotation = 4096 - elevator_rotation;
-#endif
     ladder_rotation = ToRotation(ladder_rotation, LADDER_RANGE) + GetDefaultAngle(SERVO_ID_LADDER) + btnPushCnt[BTN_DEF_LEFT] - btnPushCnt[BTN_DEF_RIGHT];
     elevator_rotation = ToRotation(elevator_rotation, ELEVATOR_RANGE) + GetDefaultAngle(SERVO_ID_ELEVATOR) + trim_position[trim] + btnPushCnt[BTN_DEF_UP] - btnPushCnt[BTN_DEF_DOWN];
     LobotSerialServoMove(Serial2, SERVO_ID_LADDER, ladder_rotation, t);
@@ -487,6 +482,7 @@ void ServoTask(void *pvParameters) {
   }
 }
 
+// 基準角変更スイッチを押したときに反映してシリアルに表示する
 void SaveTask(void *pvParameters) {
   while (true) {
     if ((btnPushCnt[BTN_DEF_LEFT] | btnPushCnt[BTN_DEF_RIGHT] | btnPushCnt[BTN_DEF_UP] | btnPushCnt[BTN_DEF_DOWN]) != 0) {
@@ -499,6 +495,7 @@ void SaveTask(void *pvParameters) {
   }
 }
 
+// 基準角の設定（EEPROMに保存しているため、電源を切っても保持される）
 void SetDefaultAngle(unsigned char ID, int DefaultAngle) {
   if (ID == SERVO_BROADCAST) return;
   if (DefaultAngle > 700 || DefaultAngle < 300) return;
@@ -507,6 +504,7 @@ void SetDefaultAngle(unsigned char ID, int DefaultAngle) {
   EEPROM.commit();
 }
 
+// 基準角の取得
 int GetDefaultAngle(unsigned char ID) {
   if (ID == SERVO_BROADCAST) return 0;
   int DefaultAngle = 0;
@@ -515,11 +513,13 @@ int GetDefaultAngle(unsigned char ID) {
 }
 
 #pragma region SERVER_HANDLE
+// 192.168.4.1でウェブページにアクセスするとhandleRootが呼び出される。
 void handleRoot() {
-  String html_default_degree = String("Current default position\n") 
-  + "Ladder default position: " + String(GetDefaultAngle(SERVO_ID_LADDER)) + "\n"
-  + "Elevator default position: " + String(GetDefaultAngle(SERVO_ID_ELEVATOR));
+  String html_default_degree = String("Current default position\n")
+                               + "Ladder default position: " + String(GetDefaultAngle(SERVO_ID_LADDER)) + "\n"
+                               + "Elevator default position: " + String(GetDefaultAngle(SERVO_ID_ELEVATOR));
   String html_text = index_html_head + html_default_degree + index_html_tail;
+  // 基準角設定用のHTML文字列を生成して返す
   server.send(200, "text/html", html_text);
 }
 
@@ -558,6 +558,7 @@ void handleSetTorque() {
 }
 #pragma endregion
 
+// 計測マイコンに現在のサーボ角を送り続ける
 void SendTask(void *pvParameters) {
   while (true) {
     if ((WiFi.status() == WL_CONNECTED)) {
@@ -584,6 +585,7 @@ void SendTask(void *pvParameters) {
   }
 }
 
+// スイッチの押された回数をカウントするための関数
 void btnEvent(int k) {
   if (millis() - smpltmr[k] < 10) return;
   smpltmr[k] = millis();
@@ -604,10 +606,11 @@ void btnEvent(int k) {
   }
 }
 
+// 回転モード、トリム値を7セグに表示する
 void DisplayCurrent() {
   digitalWrite(LATCH_PIN, LOW);
-  SPI.transfer(DIGITS[ROTATION_MODE]); // 回転モード（線形・非線形）の表示
-  SPI.transfer(DIGITS[trim]);  // トリム値
+  SPI.transfer(DIGITS[ROTATION_MODE]);  // 回転モード（線形・非線形）の表示
+  SPI.transfer(DIGITS[trim]);           // トリム値
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -630,28 +633,25 @@ void setup() {
   pinMode(ELEVATOR_CHECK_PIN, INPUT_PULLUP);
   pinMode(LADDER_STICK_PIN, ANALOG);
   pinMode(ELEVATOR_STICK_PIN, ANALOG);
-  pinMode(LADDER_MINI_STICK_PIN, ANALOG);
-  pinMode(ELEVATOR_MINI_STICK_PIN, ANALOG);
   pinMode(SCK_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
   pinMode(SDI_PIN, OUTPUT);
 
+  // 7セグでSPI通信を行うために初期化が必要
   digitalWrite(LATCH_PIN, HIGH);
   SPI.begin();
   SPI.setBitOrder(LSBFIRST);
   SPI.setDataMode(0);
   delay(100);
 
-  // SetDefaultAngle(2, 500);
-  // SetDefaultAngle(3, 500);
-
+  // スライドスイッチでアクセスポイントを立てるかを切り替える
   if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("WASA2023Control", "wasa2023");
     server.on("/", handleRoot);
     server.on("/PostLadderDefault", handleSetLadderDefaultAngle);
     server.on("/PostElevatorDefault", handleSetElevatorDefaultAngle);
-    // server.on("/GetDefault", handleGetDefaultAngle);
+    server.on("/GetDefault", handleGetDefaultAngle);
     server.on("/PostTorque", handleSetTorque);
     server.onNotFound(handleNotFound);
     server.begin();
@@ -688,6 +688,7 @@ void loop() {
 
   DisplayCurrent();
 
+  // トルクを変えても動作指令を送ると自動的にトルクがオンになるためこのコードは無意味である
   if (digitalRead(BOOT_PIN) == LOW) {
     if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
       LobotSerialServoUnload(Serial2, SERVO_ID_LADDER);
