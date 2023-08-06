@@ -395,7 +395,7 @@ void SDWriteTask(void *pvParameters) {
     PRINT_COMMA;
     fp.print(elevator_rotation);
     PRINT_COMMA;
-    fp.print(millis() - log_start_time);
+    fp.print((millis() - log_start_time) / 1000.0);
     PRINT_COMMA;
     fp.println();
     delay(50);
@@ -531,7 +531,7 @@ void handleGetMeasurementData() {
   json_array["Power"] = power;
   json_array["Ladder"] = ladder_rotation;
   json_array["Elevator"] = elevator_rotation;
-  json_array["RunningTime"] = millis();
+  json_array["RunningTime"] = millis() / 1000.0;
 
   // JSONフォーマットの文字列に変換する
   serializeJson(json_array, json_string, sizeof(json_string));
