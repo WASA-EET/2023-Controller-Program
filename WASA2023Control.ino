@@ -95,25 +95,30 @@ static unsigned char fixedBtnSt[BTN_MAX] = { 0 };  // 確定ボタン状態
 static int btnPushCnt[BTN_MAX] = { 0 };            // カウント数
 static unsigned long smpltmr[BTN_MAX] = { 0 };     // サンプル時間
 
-const int SERVO_ID_LADDER = 3;
-const int SERVO_ID_ELEVATOR = 2;
-const int SERVO_BROADCAST = 254;  // IDに254を指定するとすべてのサーボに指令を送ることができる
+static const int SERVO_ID_LADDER = 3;
+static const int SERVO_ID_ELEVATOR = 2;
+static const int SERVO_BROADCAST = 254;  // IDに254を指定するとすべてのサーボに指令を送ることができる
 
-const int JOYSTICK_NEUTRAL = 2048;
-const int SERVO_FREQUENCY = 100;
+static const int SERVO_FREQUENCY = 100; // 1秒間に何回サーボに対して動作命令を行うか
 
-const int LADDER_RANGE = 250;    // ラダーの可動域（1につき0.24度）
-const int ELEVATOR_RANGE = 250;  // エレベーターの可動域
+static const int LADDER_RANGE = 250;    // ラダーの可動域（1につき0.24度）
+static const int ELEVATOR_RANGE = 250;  // エレベーターの可動域
 
 static int ladder_rotation = 0;
 static int elevator_rotation = 0;
-int trim_position[10] = { 0, 20, 40, 60, 80, 100, 120, 140, 160, 180 };
-int trim = 0;
+static int trim_position[10] = { 0, -5, -8, -11, -14, -17, -20, -23, -26, -29 }; // トリム値リスト
+static int trim = 0;
+static bool STA_CONNECTION_STATE = false;
 
 WebServer server(80);
 static int wifi_status;
+// 計測用マイコンのSSIDとパスワード
 const char *const STA_SSID = "WASA2023Measurement";
 const char *const STA_PASS = "wasa2023";
+// 操舵側APのパラメータ
+const IPAddress localIP(192, 168, 5, 1);  // 自身のIPアドレス（計測用マイコンのIPアドレスとは重複させないこと！）
+const IPAddress gateway(192, 168, 5, 0);  // ゲートウェイ（ゲートウェイとサブネットマスクによるの支配区間が計測と被らないようにすること）
+const IPAddress subnet(255, 255, 255, 0); // サブネットマスク
 
 #pragma region SERVO_LIBRARY
 #define GET_LOW_BYTE(A) (uint8_t)((A))
@@ -439,16 +444,23 @@ int LobotSerialServoReadVin(HardwareSerial &SerialX, uint8_t id) {
 
 // 入力数値を引数として非線形に変換した値に変換する
 // 曲率はROTATION_MODEの数値で決定されている
+static const int NEUTRAL_RANGE = 256;
+static const int JOYSTICK_NEUTRAL = 2048;
+static const double RANGE_CENTER = (4096.0 - NEUTRAL_RANGE) / 2;
 int ToRotation(int x, int range) {
-  // 中央付近での誤差を無くす
-  if (x >= JOYSTICK_NEUTRAL - 256 && x <= JOYSTICK_NEUTRAL + 256) {
-    x = JOYSTICK_NEUTRAL;
+  // 閾値以内であればジョイスティックは中央にあるものとみなす
+  if (x >= JOYSTICK_NEUTRAL - NEUTRAL_RANGE / 2 && x <= JOYSTICK_NEUTRAL + NEUTRAL_RANGE / 2) {
+    x = RANGE_CENTER;
+  }
+  // ニュートラルの左端と右端を接続して線形に変換する
+  if (x > JOYSTICK_NEUTRAL) {
+    x -= NEUTRAL_RANGE;
   }
   double curvature = (double)ROTATION_MODE;
   if (ROTATION_MODE == ROT_MODE_LINEAR) {
-    return (int)((x - 2048.0) / 2048.0 * (range / 2));
+    return (int)((x - RANGE_CENTER) / RANGE_CENTER * (range / 2));
   } else {
-    return (int)(sinh((x - 2048.0) / (2048.0 / curvature)) / sinh(curvature) * (range / 2));
+    return (int)(sinh((x - RANGE_CENTER) / (RANGE_CENTER / curvature)) / sinh(curvature) * (range / 2));
   }
 }
 
@@ -467,8 +479,11 @@ void ServoTask(void *pvParameters) {
     int t = 1000 / SERVO_FREQUENCY;
 
     ladder_rotation = digitalRead(LADDER_CHECK_PIN) == LOW ? analogRead(LADDER_STICK_PIN) : JOYSTICK_NEUTRAL;
-    elevator_rotation = digitalRead(ELEVATOR_CHECK_PIN) == LOW ? analogRead(ELEVATOR_STICK_PIN) : JOYSTICK_NEUTRAL;
-
+    elevator_rotation = 4096 - (digitalRead(ELEVATOR_CHECK_PIN) == LOW ? analogRead(ELEVATOR_STICK_PIN) : JOYSTICK_NEUTRAL);
+#ifdef PRINT_SERVO_COMMAND
+    Serial.println(ladder_rotation);
+    Serial.println(elevator_rotation);
+#endif
     ladder_rotation = ToRotation(ladder_rotation, LADDER_RANGE) + GetDefaultAngle(SERVO_ID_LADDER) + btnPushCnt[BTN_DEF_LEFT] - btnPushCnt[BTN_DEF_RIGHT];
     elevator_rotation = ToRotation(elevator_rotation, ELEVATOR_RANGE) + GetDefaultAngle(SERVO_ID_ELEVATOR) + trim_position[trim] + btnPushCnt[BTN_DEF_UP] - btnPushCnt[BTN_DEF_DOWN];
     LobotSerialServoMove(Serial2, SERVO_ID_LADDER, ladder_rotation, t);
@@ -561,25 +576,31 @@ void handleSetTorque() {
 // 計測マイコンに現在のサーボ角を送り続ける
 void SendTask(void *pvParameters) {
   while (true) {
-    if ((WiFi.status() == WL_CONNECTED)) {
+    if (WiFi.status() == WL_CONNECTED) {
       HTTPClient http;
       String uri = "/SetServoRotation?";
-      uri += String("Ladder=") + String(ladder_rotation);
+      uri += String("Ladder=") + String((ladder_rotation - GetDefaultAngle(SERVO_ID_LADDER)) * 10.67 / 100, 3);
       uri += "&";
-      uri += String("Elevator=") + String(elevator_rotation);
-      http.begin("192.168.4.1", 80, uri);
+      uri += String("Elevator=") + String((elevator_rotation - GetDefaultAngle(SERVO_ID_ELEVATOR)) * 10.67 / 100, 3);
+      http.begin("192.168.4.1", 80, uri); // 計測マイコンAPのIPアドレスを指定
       // start connection and send HTTP header
       int httpCode = http.GET();
       if (httpCode > 0) {
         // file found at server
         String payload = http.getString();
-        if (httpCode != HTTP_CODE_OK) {
+        if (httpCode == HTTP_CODE_OK) {
+          STA_CONNECTION_STATE = true;
+        } else {
           Serial.println(payload);
+          STA_CONNECTION_STATE = false;
         }
       } else {
         Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
+        STA_CONNECTION_STATE = false;
       }
       http.end();
+    } else {
+      STA_CONNECTION_STATE = false;
     }
     delay(50);
   }
@@ -609,8 +630,8 @@ void btnEvent(int k) {
 // 回転モード、トリム値を7セグに表示する
 void DisplayCurrent() {
   digitalWrite(LATCH_PIN, LOW);
-  SPI.transfer(DIGITS[ROTATION_MODE]);  // 回転モード（線形・非線形）の表示
-  SPI.transfer(DIGITS[trim]);           // トリム値
+  SPI.transfer(DIGITS[ROTATION_MODE] | (STA_CONNECTION_STATE ? 1 : 0));  // 回転モード（線形・非線形）の表示、計測マイコンに対する接続状態確認
+  SPI.transfer(DIGITS[trim]); // トリム値
   digitalWrite(LATCH_PIN, HIGH);
 }
 
@@ -648,10 +669,10 @@ void setup() {
   if (digitalRead(WIFI_STATUS_SW_PIN) == HIGH) {
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("WASA2023Control", "wasa2023");
+    WiFi.softAPConfig(localIP, gateway, subnet);
     server.on("/", handleRoot);
     server.on("/PostLadderDefault", handleSetLadderDefaultAngle);
     server.on("/PostElevatorDefault", handleSetElevatorDefaultAngle);
-    server.on("/GetDefault", handleGetDefaultAngle);
     server.on("/PostTorque", handleSetTorque);
     server.onNotFound(handleNotFound);
     server.begin();

@@ -17,7 +17,8 @@ static int power = 0;
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
 <html>
-
+  <body>
+  </body>
 </html>
 )rawliteral";
 
@@ -33,7 +34,7 @@ enum {
 //#define PRINT_DEBUG_DPS
 //#define PRINT_DEBUG_BNO
 //#define PRINT_DEBUG_GPS
-//#define PRINT_DEBUG_ALTITUDE
+#define PRINT_DEBUG_ALTITUDE
 //#define PRINT_DEBUG_TACHO
 //#define PRINT_DEBUG_RPM
 //#define PRINT_DEBUG_CONTROL
@@ -51,8 +52,8 @@ const int LOG_LED_PIN = 26;
 const int LOG_SW_PIN = 27;
 const int SLIDE_VL_PIN = 35;
 
-int ladder_rotation = 0;
-int elevator_rotation = 0;
+float ladder_rotation = 0;
+float elevator_rotation = 0;
 
 #pragma region DPS310
 // 気圧計による気圧、温度の測定及び高度の計算
@@ -97,7 +98,7 @@ void GetDPS() {
     Serial.println(" hPa");
 #endif
   }
-  dps_altitude = dps.readAltitude(ground_pressure) * 100;
+  dps_altitude = dps.readAltitude(ground_pressure);
 #ifdef PRINT_DEBUG_DPS
   Serial.print("Altitude(DPS310) = ");
   Serial.print(dps_altitude);
@@ -149,17 +150,17 @@ void GetBNO() {
 // GPSの測定
 #define GPSSerial Serial2
 TinyGPSPlus gps;
-uint32_t gps_latitude = 0;   // 緯度 10000000倍 359752780
-uint32_t gps_longitude = 0;  // 経度 10000000倍 1395238890
+double gps_latitude = 0;   // 緯度（小数第9位まで）
+double gps_longitude = 0;  // 経度（小数第9位まで）
 uint16_t gps_year = 0;       // 西暦
 uint8_t gps_month = 0;       // 月
 uint8_t gps_day = 0;         // 日
-uint16_t gps_hour = 0;       // 時
-uint16_t gps_minute = 0;     // 分
-uint16_t gps_second = 0;     // 秒
-uint32_t gps_altitude = 0;   // 高度 センチ単位
-uint16_t gps_course = 0;     // 進行方向(deg) 100倍
-uint16_t gps_speed = 0;      // 対地速度(m/s) 1000倍 精度は高くないので参考程度に
+uint8_t gps_hour = 0;       // 時
+uint8_t gps_minute = 0;     // 分
+uint8_t gps_second = 0;     // 秒
+double gps_altitude = 0;   // 高度 メートル単位
+double gps_course = 0;     // 進行方向(deg)
+double gps_speed = 0;      // 対地速度(m/s) 精度は高くないので参考程度に
 
 void InitGPS() {
   GPSSerial.begin(9600);
@@ -168,17 +169,17 @@ void GetGPS() {
   while (GPSSerial.available() > 0) {
     gps.encode(GPSSerial.read());
     if (gps.location.isUpdated()) {
-      gps_latitude = (uint32_t)(gps.location.lat() * 10000000);   // 10000000倍
-      gps_longitude = (uint32_t)(gps.location.lng() * 10000000);  // 10000000倍
-      gps_year = (uint16_t)gps.date.year();
-      gps_month = (uint8_t)gps.date.month();
-      gps_day = (uint8_t)gps.date.day();
-      gps_hour = gps.time.hour() + 9;  // 時差を考慮すること
+      gps_latitude = gps.location.lat();
+      gps_longitude = gps.location.lng();
+      gps_year = gps.date.year();
+      gps_month = gps.date.month();
+      gps_day = gps.date.day();
+      gps_hour = (gps.time.hour() + 9) % 24;  // 時差を考慮すること
       gps_minute = gps.time.minute();
       gps_second = gps.time.second();
-      gps_altitude = (uint32_t)gps.altitude.value();  // 高度 センチ単位
-      gps_course = (uint16_t)gps.course.value();      // 進行方向(deg) 100倍
-      gps_speed = (uint16_t)(gps.speed.mps() * 1000);
+      gps_altitude = gps.altitude.meters();  // 高度 メートル単位
+      gps_course = gps.course.deg();      // 進行方向(deg)
+      gps_speed = gps.speed.mps();
 #ifdef PRINT_DEBUG_GPS
       Serial.print("Latitude:  ");
       Serial.println(gps_latitude);
@@ -221,8 +222,8 @@ double snapCurve(uint16_t x) {
 }
 
 void GetAltitude() {
-  // altitude_read = analogRead(ALTITUDE_PIN) / 2; // アナログ入力で読み取る場合
-  altitude_read = pulseIn(ALTITUDE_PIN, HIGH, 124000) / 58.0;  // パルス入力で読み取る場合
+  altitude_read = analogRead(ALTITUDE_PIN) / 2 * 3.3 / 4.7; // アナログ入力で読み取る場合
+  // altitude_read = pulseIn(ALTITUDE_PIN, HIGH, 124000) / 58.0;  // パルス入力で読み取る場合
   diff_alti = abs(altitude_read - altitude);
   altitude += (altitude_read - altitude) * snapCurve(diff_alti * 0.1);
 
@@ -345,21 +346,13 @@ File fp;
 
 void SDWriteTask(void *pvParameters) {
   while (fp && log_state) {
-    fp.print(gps_year);
+    fp.print(gps_year); fp.print("/"); fp.print(gps_month); fp.print("/"); fp.print(gps_day);
     PRINT_COMMA;
-    fp.print(gps_month);
+    fp.print(gps_hour); fp.print(":"); fp.print(gps_minute); fp.print(":"); fp.print(gps_second);
     PRINT_COMMA;
-    fp.print(gps_day);
+    fp.printf("%.9f", gps_latitude);
     PRINT_COMMA;
-    fp.print(gps_hour);
-    PRINT_COMMA;
-    fp.print(gps_minute);
-    PRINT_COMMA;
-    fp.print(gps_second);
-    PRINT_COMMA;
-    fp.print(gps_latitude);
-    PRINT_COMMA;
-    fp.print(gps_longitude);
+    fp.printf("%.9f", gps_longitude);
     PRINT_COMMA;
     fp.print(gps_altitude);
     PRINT_COMMA;
@@ -391,9 +384,9 @@ void SDWriteTask(void *pvParameters) {
     PRINT_COMMA;
     fp.print(power);
     PRINT_COMMA;
-    fp.print(ladder_rotation);
+    fp.printf("%.3f", ladder_rotation);
     PRINT_COMMA;
-    fp.print(elevator_rotation);
+    fp.printf("%.3f", elevator_rotation);
     PRINT_COMMA;
     fp.print((millis() - log_start_time) / 1000.0);
     PRINT_COMMA;
@@ -430,7 +423,7 @@ void StartSDWrite() {
   standard_roll = roll;
   standard_pitch = pitch;
   standard_yaw = yaw;
-  fp.println("Year, Month, Day, Hour, Minute, Second, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Power, Ladder, Elevator, RunningTime");
+  fp.println("Date, Time, Latitude, Longitude, GPSAltitude, GPSCourse, GPSSpeed, Roll, Pitch, Yaw, Temperature, Pressure, GroundPressure, DPSAltitude, Altitude, AirSpeed, PropellerRotationSpeed, Cadence, Power, Ladder, Elevator, RunningTime");
 
   xTaskCreatePinnedToCore(SDWriteTask, "SDWriteTask", 4096, NULL, 1, NULL, 0);
 }
@@ -466,11 +459,23 @@ void InitSD() {
 #pragma endregion
 
 #pragma region SERVER
+// 計測側APのパラメータ
+const IPAddress localIP(192, 168, 4, 1);  // 自身のIPアドレス（操舵用マイコンのIPアドレスとは重複させないこと！）
+const IPAddress gateway(192, 168, 4, 0);  // ゲートウェイ（ゲートウェイとサブネットマスクによるの支配区間が操舵と被らないようにすること）
+const IPAddress subnet(255, 255, 255, 0); // サブネットマスク
 // HTTPサーバーでの処理
 WebServer server(80);
 
 void handleRoot() {
   server.send(HTTP_CODE_OK, "text/html", index_html);
+}
+void handleLogStart() {
+  StartSDWrite();
+  server.send(HTTP_CODE_OK, "text/plain", String(log_state));
+}
+void handleLogStop() {
+  StopSDWrite();
+  server.send(HTTP_CODE_OK, "text/plain", String(log_state));
 }
 void handleNotFound() {
   server.send(HTTP_CODE_NOT_FOUND, "text/plain", "Not Found");
@@ -486,10 +491,10 @@ void handleGetGroundPressure() {
 }
 void handleSetServoRotation() {  // 操舵から値を受信する。サーボが動くわけではないので注意
   if (server.hasArg("Ladder")) {
-    ladder_rotation = server.arg("Ladder").toInt();
+    ladder_rotation = server.arg("Ladder").toFloat();
   }
   if (server.hasArg("Elevator")) {
-    elevator_rotation = server.arg("Elevator").toInt();
+    elevator_rotation = server.arg("Elevator").toFloat();
   }
 #ifdef PRINT_DEBUG_CONTROL
   Serial.printf("Ladder Rotation: %d\n", ladder_rotation);
@@ -542,10 +547,13 @@ void handleGetMeasurementData() {
 void InitServer() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP("WASA2023Measurement", "wasa2023");
+  WiFi.softAPConfig(localIP, gateway, subnet);
   server.on("/", handleRoot);
   server.on("/SetGroundPressure", handleSetGroundPressure);
   server.on("/GetGroundPressure", handleGetGroundPressure);
   server.on("/SetServoRotation", handleSetServoRotation);
+  server.on("/LogStart", handleLogStart);
+  server.on("/LogStop", handleLogStop);
   server.on("/GetMeasurementData", handleGetMeasurementData);
   server.onNotFound(handleNotFound);
   server.begin();
@@ -605,7 +613,7 @@ void setup() {
   pinMode(LOG_SW_PIN, INPUT_PULLUP);
   pinMode(TACHO_PIN[0], INPUT_PULLUP);
   pinMode(TACHO_PIN[1], INPUT_PULLUP);
-  pinMode(ALTITUDE_PIN, INPUT);  // PULSE入力ならINPUT, アナログ入力ならANALOG
+  pinMode(ALTITUDE_PIN, ANALOG);  // PULSE入力ならINPUT, アナログ入力ならANALOG
   pinMode(SLIDE_VL_PIN, ANALOG);
 
   InitDPS();
