@@ -346,9 +346,9 @@ File fp;
 
 void SDWriteTask(void *pvParameters) {
   while (fp && log_state) {
-    fp.printf("%02d/%02d/%02d", gps_year, gps_month, gps_day);
+    fp.printf("%d/%d/%d", gps_year, gps_month, gps_day);
     PRINT_COMMA;
-    fp.printf("%02d:%02d:%02d", gps_hour, gps_minute, gps_second);
+    fp.printf("%d:%02d:%02d", gps_hour, gps_minute, gps_second);
     PRINT_COMMA;
     fp.printf("%.9f", gps_latitude);
     PRINT_COMMA;
