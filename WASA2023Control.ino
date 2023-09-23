@@ -1,5 +1,5 @@
 // #define LOBOT_DEBUG
-// #define PRINT_SERVO_COMMAND
+#define PRINT_SERVO_COMMAND
 
 #include <WiFi.h>
 #include <WebServer.h>

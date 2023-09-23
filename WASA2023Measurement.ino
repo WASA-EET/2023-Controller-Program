@@ -36,7 +36,7 @@ enum {
 //#define PRINT_DEBUG_GPS
 #define PRINT_DEBUG_ALTITUDE
 //#define PRINT_DEBUG_TACHO
-//#define PRINT_DEBUG_RPM
+#define PRINT_DEBUG_RPM
 //#define PRINT_DEBUG_CONTROL
 //#define PRINR_DEBUG_LOOP
 
@@ -289,6 +289,7 @@ void InitTacho() {
 
 #pragma region ROTATION_SPEED
 // 回転数系のコード
+const int SLIT_NUM = 36;
 volatile uint16_t propeller_interrupts = 0;
 uint32_t propeller_rotation = 106666;
 uint32_t propeller_last_time = 0;
@@ -313,9 +314,10 @@ void detachPropeller() {
 void GetRPM() {
   propeller_delta_time = micros() - propeller_last_time;
   if (propeller_delta_time > min_propeller_delta) {
-    detachPropeller();
+    detachPropeller(); // 計算中に値が変わらないようにする
     if (propeller_interrupts > min_interrupts) {
-      propeller_rotation = (uint32_t)((double)1000000000.0 * ((double)propeller_interrupts / (double)propeller_delta_time) * 0.0009375);
+      // propeller_rotation = 割り込み数 / (スリット数 * 2.0)
+      propeller_rotation = propeller_interrupts / (2.0 * SLIT_NUM) / (propeller_delta_time / 1000000.0) * 60.0;
     } else {
       propeller_rotation = 0;
     }
@@ -325,7 +327,6 @@ void GetRPM() {
   }
 #ifdef PRINT_DEBUG_RPM
   Serial.println(propeller_rotation);
-  // r = 0.0009375 = 0.001 (i/ks -> i/s) * 60 (i/s -> i/m) / 64(i/m -> r/m)
 #endif
 }
 
